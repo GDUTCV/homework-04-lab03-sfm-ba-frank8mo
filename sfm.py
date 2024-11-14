@@ -1,3 +1,5 @@
+# 2112404382 莫沛凡
+
 import os
 import numpy as np
 import cv2
@@ -25,11 +27,15 @@ def get_init_image_ids(scene_graph: dict) -> (str, str):
         [image_id1, image_id2]
     """
     max_pair = [None, None]  # dummy value
-    """ YOUR CODE HERE """
-    
+    max_num_inliers = 0
+    for image_id1, neighbors in scene_graph.items():
+        for image_id2 in neighbors:
+            matches = load_matches(image_id1=image_id1, image_id2=image_id2)
+            num_inliers = matches.shape[0]
+            if num_inliers > max_num_inliers:
+                max_num_inliers = num_inliers
+                max_pair = [image_id1, image_id2]
 
-
-    """ END YOUR CODE HERE """
     image_id1, image_id2 = sorted(max_pair)
     return image_id1, image_id2
 
@@ -65,9 +71,7 @@ def get_init_extrinsics(image_id1: str, image_id2: str, intrinsics: np.ndarray) 
     Returns:
         3 x 4 extrinsic matrix for image 1; 3 x 4 extrinsic matrix for image 2
     """
-    extrinsics1 = np.zeros(shape=[3, 4], dtype=float)
-    extrinsics1[:3, :3] = np.eye(3)
-
+    extrinsics1 = np.eye(3, 4)  # [I|0]
     match_id = '_'.join([image_id1, image_id2])
     essential_mtx_file = os.path.join(RANSAC_ESSENTIAL_DIR, match_id + '.npy')
     essential_mtx = np.load(essential_mtx_file)
@@ -76,12 +80,9 @@ def get_init_extrinsics(image_id1: str, image_id2: str, intrinsics: np.ndarray) 
     points2d_1 = get_selected_points2d(image_id=image_id1, select_idxs=matches[:, 0])
     points2d_2 = get_selected_points2d(image_id=image_id2, select_idxs=matches[:, 1])
 
-    extrinsics2 = np.zeros(shape=[3, 4], dtype=float)
-    """ YOUR CODE HERE """
-    
+    _, R, t, _ = cv2.recoverPose(E=essential_mtx, points1=points2d_1, points2=points2d_2, cameraMatrix=intrinsics)
+    extrinsics2 = np.hstack((R, t))  # [R|t]
 
-
-    """ END YOUR CODE HERE """
     return extrinsics1, extrinsics2
 
 
@@ -153,11 +154,18 @@ def get_reprojection_residuals(points2d: np.ndarray, points3d: np.ndarray, intri
 
     """
     residuals = np.zeros(points2d.shape[0])
-    """ YOUR CODE HERE """
-   
 
+    homo_3d_points = np.hstack((points3d, np.ones((points3d.shape[0], 1))))  # avoid np.concatenate
 
-    """ END YOUR CODE HERE """
+    extrinsics = np.hstack([rotation_mtx, tvec.reshape(-1, 1)])
+    projection_matrix = np.dot(intrinsics, extrinsics)
+
+    projected_points_2d = np.dot(projection_matrix, homo_3d_points.T)
+    projected_points_2d /= projected_points_2d[-1, :]  # Normalize by the last row
+    projected_points_2d = projected_points_2d[:2].T  # Keep first 2 rows
+
+    residuals = np.linalg.norm(points2d - projected_points_2d, axis=1)
+
     return residuals
 
 
@@ -193,19 +201,23 @@ def solve_pnp(image_id: str, point2d_idxs: np.ndarray, all_points3d: np.ndarray,
         selected_idxs = np.random.choice(num_pts, size=6, replace=False).reshape(-1)
         selected_pts2d = points2d[selected_idxs, :]
         selected_pts3d = points3d[selected_idxs, :]
-        
+
         rotation_mtx, tvec = np.eye(3), np.zeros(3, dtype=float)  # dummy values
         residuals = np.zeros(shape=selected_pts2d.shape[0], dtype=float)
-        """ 
-        YOUR CODE HERE 
-        1. call cv2.solvePnP(..., flags=cv2.SOLVEPNP_ITERATIVE, ...)
-        2. convert the returned rotation vector to rotation matrix using cv2.Rodrigues
-        3. compute the reprojection residuals
-        """
-       
 
+        _, rotation_vector, tvec = cv2.solvePnP(objectPoints=selected_pts3d,
+                                                imagePoints=selected_pts2d,
+                                                cameraMatrix=intrinsics,
+                                                distCoeffs=None,
+                                                flags=cv2.SOLVEPNP_ITERATIVE)
 
-        """ END YOUR CODE HERE """
+        rotation_mtx, _ = cv2.Rodrigues(rotation_vector)
+
+        residuals = get_reprojection_residuals(points2d=points2d,
+                                               points3d=points3d,
+                                               intrinsics=intrinsics,
+                                               rotation_mtx=rotation_mtx,
+                                               tvec=tvec)
 
         is_inlier = residuals <= inlier_threshold
         num_inliers = np.sum(is_inlier).item()
@@ -249,15 +261,14 @@ def add_points3d(image_id1: str, image_id2: str, all_extrinsic: dict, intrinsics
     # triangulate new points that were not registered
     matches_idxs = np.array([np.argwhere(matches[:, 1] == i).reshape(-1)[0] for i in points2d_idxs2])
     matches = matches[matches_idxs, :]
-    """ 
-    START YOUR CODE HERE:
-    triangulate between the image points for the unregistered matches for image_id1 and image_id2 to get new points3d
-    new_points3d = triangulate(..., kp_idxs1=matches[:, 0], kp_idxs2=matches[:, 1], ...)
-    """
-    
 
-
-    """ END YOUR CODE HERE """
+    new_points3d = triangulate(image_id1=image_id1,
+                               image_id2=image_id2,
+                               kp_idxs1=matches[:, 0],
+                               kp_idxs2=matches[:, 1],
+                               extrinsics1=all_extrinsic[image_id1],
+                               extrinsics2=all_extrinsic[image_id2],
+                               intrinsics=intrinsics)
 
     num_new_points3d = new_points3d.shape[0]
     new_points3d_idxs = np.arange(num_new_points3d) + points3d.shape[0]
@@ -284,12 +295,19 @@ def get_next_pair(scene_graph: dict, registered_ids: list):
         registered_id: registered image id that has highest number of inliers along with the new_id
     """
     max_new_id, max_registered_id, max_num_inliers = None, None, 0
-    """ YOUR CODE HERE """
-    
+
+    for registered_id in registered_ids:
+        neighbors = scene_graph[registered_id]
+        for new_id in neighbors:
+            if new_id not in registered_ids:
+                matches = load_matches(registered_id, new_id)
+                num_inliers = matches.shape[0]
+                if num_inliers > max_num_inliers:
+                    max_num_inliers = num_inliers
+                    max_new_id = new_id
+                    max_registered_id = registered_id
 
 
-    
-    """ END YOUR CODE HERE """
     return max_new_id, max_registered_id
 
 

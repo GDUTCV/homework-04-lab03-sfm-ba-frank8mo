@@ -1,3 +1,5 @@
+# 2112404382 莫沛凡
+
 import os
 import numpy as np
 import cv2
@@ -14,7 +16,7 @@ PREDICTION_DIR = os.path.join(PROJECT_DIR, 'predictions')
 DATA_DIR = os.path.join(PROJECT_DIR, 'data')
 
 argparser = argparse.ArgumentParser()
-argparser.add_argument('--dataset', type=str, choices=['temple', 'mini-temple'])
+argparser.add_argument('--dataset', type=str, choices=['temple', 'mini-temple'], default='temple')
 argparser.add_argument('--ba', action='store_true')
 args = argparser.parse_args()
 
@@ -115,13 +117,10 @@ def detect_keypoints(image_file: os.path):
     save_file = os.path.join(KEYPOINT_DIR, image_id + '.pkl')
 
     keypoints, descriptors = [], []
-    """ YOUR CODE HERE:
-    Detect keypoints using cv2.SIFT_create() and sift.detectAndCompute
-    """
-    
 
-
-    """ END YOUR CODE HERE. """
+    image = cv2.imread(image_file, cv2.IMREAD_GRAYSCALE)
+    sift = cv2.SIFT_create()
+    keypoints, descriptors = sift.detectAndCompute(image, None)
 
     keypoints = [encode_keypoint(kp=kp) for kp in keypoints]
     save_dict = {
@@ -162,15 +161,14 @@ def create_feature_matches(image_file1: os.path, image_file2: os.path, lowe_rati
     keypoints2, descriptors2 = get_detected_keypoints(image_id=image_id2)
 
     good_matches = []
-    """ 
-    YOUR CODE HERE: 
-    1. Run cv.BFMatcher() and matcher.knnMatch(descriptors1, descriptors2, 2)
-    2. Filter the feature matches using the Lowe ratio test.
-    """
-    
 
+    bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=False)
+    matches = bf.knnMatch(descriptors1, descriptors2, k=2)
 
-    """ END YOUR CODE HERE. """
+    for m, n in matches:
+        if m.distance < lowe_ratio * n.distance:
+            good_matches.append([m])
+
     if len(good_matches) < min_matches:
         return match_id
 
@@ -237,15 +235,9 @@ def create_ransac_matches(image_file1: os.path, image_file2: os.path,
 
     is_inlier = np.ones(shape=points1.shape[0], dtype=bool)  # dummy value
     essential_mtx = np.zeros(shape=[3,3], dtype=float)
-    """ 
-    YOUR CODE HERE 
-    Perform goemetric verification by finding the essential matrix between keypoints in the first image and keypoints in
-    the second image using cv2.findEssentialMatrix(..., method=cv2.RANSAC, threshold=ransac_threshold, ...)
-    """
-    
 
-
-    """ END YOUR CODE HERE """
+    essential_mtx, is_inlier = cv2.findEssentialMat(points1, points2, cameraMatrix=camera_intrinsics,
+                                                    method=cv2.RANSAC, prob=0.999, threshold=ransac_threshold)
 
     is_inlier = is_inlier.ravel().tolist()
     inlier_idxs = np.argwhere(is_inlier).reshape(-1)
@@ -273,15 +265,18 @@ def create_scene_graph(image_files: list, min_num_inliers: int = 40):
     graph = nx.Graph()
     graph.add_nodes_from(list(range(len(image_files))))
     image_ids = [os.path.basename(file)[:-4] for file in image_files]
-    """ 
-    YOUR CODE HERE:
-    Add edges to <graph> if the minimum number of geometrically verified inliers between images is at least  
-    <min_num_inliers> 
-    """
-    
 
-    
-    """ END YOUR CODE HERE """
+    for i in range(len(image_ids)):
+        id_1 = image_ids[i]
+        for j in range(i + 1, len(image_ids)):
+            id_2 = image_ids[j]
+            match_id = '{}_{}'.format(id_1, id_2)
+            match_save_file = os.path.join(RANSAC_MATCH_DIR, match_id + '.npy')
+
+            if os.path.exists(match_save_file):
+                inliers = np.load(match_save_file)
+                if len(inliers) > min_num_inliers:
+                    graph.add_edge(i, j)
 
     graph_dict = {node: [] for node in image_ids}
     for i1, i2 in graph.edges:

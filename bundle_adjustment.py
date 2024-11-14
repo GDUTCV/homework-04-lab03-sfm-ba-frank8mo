@@ -1,3 +1,5 @@
+# 2112404382 莫沛凡
+
 import numpy as np
 import cv2
 
@@ -35,17 +37,20 @@ def compute_ba_residuals(parameters: np.ndarray, intrinsics: np.ndarray, num_cam
     for rvec in camera_rvecs:
         rot_mtx, _ = cv2.Rodrigues(rvec)
         extrinsics.append(rot_mtx)
-    extrinsics = np.array(extrinsics)  # C x 3 x 3
-    extrinsics = np.concatenate([extrinsics, camera_tvecs.reshape(-1, 3, 1)], axis=2)  # C x 3 x 4
+    extrinsics = np.array(extrinsics)
+    extrinsics = np.concatenate([extrinsics, camera_tvecs.reshape(-1, 3, 1)], axis=2)
 
     residuals = np.zeros(shape=points2d.shape[0], dtype=float)
-    """ 
-    YOUR CODE HERE: 
-    NOTE: DO NOT USE LOOPS 
-    HINT: I used np.matmul; np.sum; np.sqrt; np.square, np.concatenate etc.
-    """
-    
 
-    
-    """ END YOUR CODE HERE """
+    selected_extrinsics = extrinsics[camera_idxs]
+    selected_points3d = points3d[points3d_idxs]
+
+    homogeneous_points3d = np.concatenate([selected_points3d, np.ones((selected_points3d.shape[0], 1))], axis=1)
+
+    projected_points_camera_frame = np.matmul(selected_extrinsics, homogeneous_points3d[:, :, np.newaxis]).squeeze()
+    projected_points_image_plane = np.matmul(intrinsics, projected_points_camera_frame.T).T
+    projected_points_image_plane /= projected_points_image_plane[:, 2:3]
+
+    residuals = np.sqrt(np.sum(np.square(points2d - projected_points_image_plane[:, :2]), axis=1))
+
     return residuals
